@@ -51,6 +51,17 @@
 
   /* ---------- шапка ---------- */
   header.top{position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--ground) 88%, transparent); backdrop-filter:saturate(1.4) blur(8px); border-bottom:1px solid var(--line)}
+  /* Компактная шапка: 23 вкладки в несколько строк съедали треть экрана и закрывали начало раздела.
+     При прокрутке (или всегда — кнопкой «Свернуть шапку») вкладки в одну строку с прокруткой. */
+  header.top .head-tools{display:flex; justify-content:flex-end; margin-top:-28px}
+  .headtoggle{appearance:none; border:1px solid var(--line); background:var(--surface); color:var(--muted); font:inherit; font-size:12px; padding:4px 10px; border-radius:999px; cursor:pointer}
+  .headtoggle:hover{color:var(--ink)}
+  header.top.compact .sub{display:none}
+  header.top.compact .brand h1{font-size:16px; margin:0}
+  header.top.compact .head-tools{margin-top:-24px}
+  header.top.compact .tabs{flex-wrap:nowrap; overflow-x:auto; margin-top:6px; scrollbar-width:thin}
+  header.top.compact .tab{padding:6px 9px; font-size:12.5px}
+  header.top.compact .pbar-wrap{margin-top:4px}
   .head-inner{max-width:1080px; margin:0 auto; padding:16px 20px 0}
   .brand{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap}
   h1{font-size:22px; margin:0; letter-spacing:-.02em; font-weight:680}
@@ -3857,6 +3868,23 @@ var Progress = (function(){
   };
 })();
 
+/* ---------- сохранённые ответы ----------
+   Ответы на мини-задания и «Практику» живут в браузере, как и баллы. Раньше
+   баллы сохранялись, а сами ответы — нет: после обновления страницы задания
+   снова были пустыми, счётчики в разделах показывали ноль, а общая шкала —
+   лучший результат. Ученики видели «прогресс то обнуляется, то не сходится». */
+var Answers = (function(){
+  const KEY = 'int-answers-v1';
+  let data = {};
+  try{ data = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(e){ data = {}; }
+  function save(){ try{ localStorage.setItem(KEY, JSON.stringify(data)); }catch(e){} }
+  return {
+    of(scope){ return {...(data[scope] || {})}; },
+    set(scope, key, j){ data[scope] = {...(data[scope] || {}), [key]: j}; save(); },
+    drop(scope, key){ if(data[scope]){ delete data[scope][key]; save(); } },
+  };
+})();
+
 /* ---------- движок мини-заданий ---------- */
 function renderTasks(rootId, items, scoreId, totalId){
   const root = document.getElementById(rootId); if(!root) return;
@@ -3870,21 +3898,34 @@ function renderTasks(rootId, items, scoreId, totalId){
       <div class="rwhy"></div>
     </div>`).join('');
   if(totalId) document.getElementById(totalId).textContent = items.length;
-  root.addEventListener('click', e => {
-    const btn = e.target.closest('.rb'); if(!btn || btn.disabled) return;
-    const task = btn.closest('.rtask'), it = items[+task.dataset.i], j = +btn.dataset.j;
-    const chosen = it.opts[j], correct = it.opts.find(o => o.ok);
+  function apply(task, j, quiet){
+    const it = items[+task.dataset.i], chosen = it.opts[j], correct = it.opts.find(o => o.ok);
+    if(!chosen) return;
+    const btn = task.querySelector(`.rb[data-j="${j}"]`);
     task.querySelectorAll('.rb').forEach((b, k) => { b.disabled = true; if(it.opts[k].ok) b.classList.add('correct'); });
-    if(!chosen.ok) btn.classList.add('wrong');
+    if(!chosen.ok && btn) btn.classList.add('wrong');
     const why = task.querySelector('.rwhy');
     why.classList.add('show');
     why.innerHTML = (chosen.ok ? '<b style="color:var(--ok)">Верно. </b>' : `<b style="color:var(--danger)">Не то — правильно «${esc(correct.t)}». </b>`) + it.why;
     if(chosen.ok){
       solved.add(task.dataset.i);
-      if(solved.size === items.length) confetti(30);
+      if(!quiet && solved.size === items.length) confetti(30);
     }
+  }
+  function score(){
     if(scoreId) document.getElementById(scoreId).textContent = solved.size;
     if(scoreId) Progress.report(scoreId, solved.size);
+  }
+  Object.entries(Answers.of(rootId)).forEach(([i, j]) => {
+    const task = root.querySelector(`.rtask[data-i="${i}"]`); if(task) apply(task, +j, true);
+  });
+  if(solved.size > 0) score();
+  root.addEventListener('click', e => {
+    const btn = e.target.closest('.rb'); if(!btn || btn.disabled) return;
+    const task = btn.closest('.rtask'), j = +btn.dataset.j;
+    Answers.set(rootId, task.dataset.i, j);
+    apply(task, j, false);
+    score();
   });
 }
 
@@ -4455,6 +4496,51 @@ renderTasks('fmtq-list', [
   });
   document.getElementById('idem-set-reset').addEventListener('click', () => { email = null; setN = 0; rSet(); });
   rAdd(); rSet();
+})();
+
+/* ДЕМО «ETag и 304»: кнопки были в разметке, а обработчиков не было — демо молчало. */
+(function(){
+  const send = document.getElementById('et-send'); if(!send) return;
+  const SIZE = 240, HEAD = 0.3;
+  let version = 'a7f3d9', cached = null, n = 0, saved = 0, rows = [];
+  const hex = () => Math.random().toString(16).slice(2, 8).padEnd(6, '0');
+  const kb = (v) => (Math.round(v * 10) / 10).toString().replace('.', ',') + ' КБ';
+  function render(){
+    const log = document.getElementById('et-log');
+    log.innerHTML = rows.length === 0
+      ? '<tr><td colspan="4" class="empty2">Нажми «Запросить справочник»</td></tr>'
+      : rows.map(r => `<tr><td>${r.i}</td><td><code class="inl">GET /api/v1/doctors</code>${r.ask ? `<br><code class="inl">If-None-Match: "${r.ask}"</code>` : ''}</td><td>${r.code === 304 ? '<b>304 Not Modified</b>' : `<b>200 OK</b><br><code class="inl">ETag: "${r.tag}"</code>`}</td><td>${kb(r.size)}</td></tr>`).join('');
+    document.getElementById('et-n').textContent = String(n);
+    document.getElementById('et-saved').textContent = kb(saved);
+  }
+  send.addEventListener('click', () => {
+    n++;
+    const el = document.getElementById('et-msg');
+    if(cached === null){
+      cached = version;
+      rows.push({i:n, ask:null, code:200, tag:version, size:SIZE});
+      msg(el, 'ok', `Запрос №${n}: копии ещё нет — сервер отдал справочник целиком (${SIZE} КБ) и отпечаток <code class="inl">ETag: "${version}"</code>. Браузер запомнил и то и другое. Нажми ещё раз.`);
+    } else if(cached === version){
+      saved += SIZE - HEAD;
+      rows.push({i:n, ask:cached, code:304, tag:version, size:HEAD});
+      msg(el, 'ok', `Запрос №${n}: браузер спросил «не изменилось?» — прислал <code class="inl">If-None-Match: "${cached}"</code>. Отпечаток совпал, сервер ответил <b>304 без тела</b>: передано ${kb(HEAD)} вместо ${SIZE} КБ. Справочник берётся из кэша.`);
+    } else {
+      rows.push({i:n, ask:cached, code:200, tag:version, size:SIZE});
+      msg(el, 'ok', `Запрос №${n}: браузер прислал старый отпечаток <code class="inl">"${cached}"</code>, а на сервере уже <code class="inl">"${version}"</code>. Отпечатки разные — сервер отдал <b>новые данные целиком</b> и новый ETag. Устаревшую копию браузер заменил.`);
+      cached = version;
+    }
+    render();
+  });
+  document.getElementById('et-change').addEventListener('click', () => {
+    version = hex();
+    msg(document.getElementById('et-msg'), 'warn', `На сервере изменили справочник — у него новый отпечаток <code class="inl">"${version}"</code>. У браузера по-прежнему старая копия. Запроси снова и посмотри, что ответит сервер.`);
+  });
+  document.getElementById('et-reset').addEventListener('click', () => {
+    version = 'a7f3d9'; cached = null; n = 0; saved = 0; rows = [];
+    render();
+    document.getElementById('et-msg').textContent = 'Нажми несколько раз, потом «Данные изменились» и снова запроси.';
+  });
+  render();
 })();
 
 renderNum('idem-key-steps', [
@@ -7711,7 +7797,7 @@ renderNum('attr-list', [
       } else {
         const lo = Math.min(r.f, r.t), hi = Math.max(r.f, r.t);
         const dir = r.t > r.f ? 'l2r' : 'r2l';
-        inner = '<div style="grid-column:' + (lo + 1) + '/' + (hi + 2) + '" class="sq-arrow ' + dir + ' ' + (r.k || '') +
+        inner = '<div style="grid-column:' + (lo + 1) + '/' + (hi + 2) + '; margin:0 calc(50% / ' + (hi - lo + 1) + ')" class="sq-arrow ' + dir + ' ' + (r.k || '') +
           '"><span class="sq-lbl">' + esc(r.l) + '</span><span class="sq-ln"></span></div>';
       }
       return '<div class="sq-row ' + cls + '" style="--n:' + n + '">' + inner + '</div>';
@@ -8638,16 +8724,13 @@ function mqHash(s){
     card.querySelector('.qreset').hidden = true;
     const h = card.querySelector('.hintbox'); if(h) h.hidden = true;
   }
-  root.addEventListener('click', e => {
-    const card = e.target.closest('.qcard'); if(!card) return;
+  function apply(card, j, quiet){
     const [ci, qi] = card.dataset.key.split('-').map(Number);
-    const q = CASES[ci].questions[qi];
-    if(e.target.closest('.qhint')){ const h = card.querySelector('.hintbox'); if(h) h.hidden = !h.hidden; return; }
-    if(e.target.closest('.qreset')){ resetCard(card); solved.delete(card.dataset.key); updateScore(); return; }
-    const opt = e.target.closest('.qopt'); if(!opt || opt.disabled) return;
-    const j = +opt.dataset.opt, chosen = q.options[j], correct = q.options.find(o => o.ok);
+    const q = CASES[ci] && CASES[ci].questions[qi]; if(!q) return;
+    const chosen = q.options[j], correct = q.options.find(o => o.ok); if(!chosen) return;
+    const opt = card.querySelector(`.qopt[data-opt="${j}"]`);
     card.querySelectorAll('.qopt').forEach((b, k) => { b.disabled = true; if(q.options[k].ok) b.classList.add('correct'); });
-    if(!chosen.ok) opt.classList.add('wrong');
+    if(!chosen.ok && opt) opt.classList.add('wrong');
     const why = card.querySelector('.qwhy');
     why.hidden = false; why.className = 'qwhy ' + (chosen.ok ? 'ok' : 'no');
     why.innerHTML = chosen.ok ? '<b>Верно! </b>' + chosen.why
@@ -8655,10 +8738,24 @@ function mqHash(s){
     card.querySelector('.qreset').hidden = false;
     if(chosen.ok){
       solved.add(card.dataset.key);
-      if(solved.size === total) confetti(60);
-      else if(solved.size % 10 === 0) confetti(18);
+      if(!quiet){
+        if(solved.size === total) confetti(60);
+        else if(solved.size % 10 === 0) confetti(18);
+      }
       Progress.report('quiz', solved.size);
     }
+  }
+  Object.entries(Answers.of('quiz')).forEach(([key, j]) => {
+    const card = root.querySelector(`.qcard[data-key="${key}"]`); if(card) apply(card, +j, true);
+  });
+  updateScore();
+  root.addEventListener('click', e => {
+    const card = e.target.closest('.qcard'); if(!card) return;
+    if(e.target.closest('.qhint')){ const h = card.querySelector('.hintbox'); if(h) h.hidden = !h.hidden; return; }
+    if(e.target.closest('.qreset')){ resetCard(card); solved.delete(card.dataset.key); Answers.drop('quiz', card.dataset.key); updateScore(); return; }
+    const opt = e.target.closest('.qopt'); if(!opt || opt.disabled) return;
+    Answers.set('quiz', card.dataset.key, +opt.dataset.opt);
+    apply(card, +opt.dataset.opt, false);
     updateScore();
   });
 })();
@@ -8686,6 +8783,28 @@ function mqHash(s){
   $$('.tab').forEach(t => t.addEventListener('click', () => { try{ localStorage.setItem(KEY, t.dataset.tab); }catch(e){} }));
   let last = null; try{ last = localStorage.getItem(KEY); }catch(e){}
   if(last && last !== 'what'){ const t = document.querySelector(`.tab[data-tab="${last}"]`); if(t && getComputedStyle(t).display !== 'none') t.click(); }
+})();
+
+(function(){ /* компактная шапка */
+  const head = document.querySelector('header.top'); if(!head) return;
+  const KEY = 'int-head-compact';
+  let pinned = false; try{ pinned = localStorage.getItem(KEY) === '1'; }catch(e){}
+  const tools = document.createElement('div');
+  tools.className = 'head-tools';
+  tools.innerHTML = '<button type="button" class="headtoggle"></button>';
+  const brand = head.querySelector('.brand'); if(brand) brand.after(tools);
+  const btn = tools.querySelector('button');
+  function apply(){
+    const on = pinned || window.scrollY > 60;
+    head.classList.toggle('compact', on);
+    btn.textContent = pinned ? '▾ Развернуть шапку' : '▴ Свернуть шапку';
+    btn.setAttribute('aria-pressed', String(pinned));
+    if(on){ const t = head.querySelector('.tab[aria-selected="true"]'); if(t) t.scrollIntoView({block:'nearest', inline:'nearest'}); }
+  }
+  btn.addEventListener('click', () => { pinned = !pinned; try{ localStorage.setItem(KEY, pinned ? '1' : '0'); }catch(e){} apply(); });
+  let ticking = false;
+  window.addEventListener('scroll', () => { if(ticking) return; ticking = true; requestAnimationFrame(() => { ticking = false; apply(); }); }, {passive:true});
+  apply();
 })();
 
 (function(){ /* галочки на вкладках */
